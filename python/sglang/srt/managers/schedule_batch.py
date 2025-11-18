@@ -214,6 +214,20 @@ class MultimodalDataItem:
     # Model-specific data stored in a dictionary
     model_specific_data: dict[str, Any] = dataclasses.field(default_factory=dict)
 
+    class SingleMultiModalDataItemContainsAllItemsOfSameModality(ValueError):
+        """Even for multiple videos, all videos are concatenated into one `MultimodalDataItem`"""
+
+    @classmethod
+    def from_nested(cls, items: "list[MultimodalDataItem]", of_modality: Modality):
+        if len(items) > 1:
+            raise cls.SingleMultiModalDataItemContainsAllItemsOfSameModality
+        item = items[0]
+        if item.modality != of_modality:
+            raise ValueError(
+                f"Expected modality {of_modality}, but got {item.modality}"
+            )
+        return item
+
     def __getattr__(self, name: str):
         if (
             "model_specific_data" in self.__dict__
