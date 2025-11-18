@@ -25,7 +25,6 @@ logger = logging.get_logger(__name__)
 
 class NemotronH_Nano_VL_V2_Config(PretrainedConfig):
     model_type = "NemotronH_Nano_VL_V2"
-    is_composition = True
 
     def __init__(
         self,
@@ -40,7 +39,7 @@ class NemotronH_Nano_VL_V2_Config(PretrainedConfig):
         projector_hidden_size=4096,
         vit_hidden_size=1280,
         attn_implementation="flash_attention_2",
-        video_pruning_rate: float = 0.0,
+        video_pruning_rate: float = 0.0,  # TODO: Override in server args?
         video_context_token: str = "<video>",
         img_context_token: str = "<image>",
         img_start_token: str = "<img>",
@@ -69,7 +68,7 @@ class NemotronH_Nano_VL_V2_Config(PretrainedConfig):
         # Assign configuration values
         vision_image_size = getattr(self.vision_config, "image_size", force_image_size)
         vision_patch_size = getattr(self.vision_config, "patch_size", patch_size)
-        self.image_size = int(
+        self.force_image_size = int(
             vision_image_size[0]
             if isinstance(vision_image_size, list)
             else vision_image_size

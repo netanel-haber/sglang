@@ -41,13 +41,13 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
     def __init__(self, hf_config, server_args, _image_processor, *args, **kwargs):
         super().__init__(hf_config, server_args, _image_processor, *args, **kwargs)
         Image.MAX_IMAGE_PIXELS = None
-        self.image_size = hf_config.image_size
+        self.force_image_size = hf_config.force_image_size
         self.VIDEO_CONTEXT_TOKEN = hf_config.video_context_token
         self.IMG_CONTEXT_TOKEN = hf_config.img_context_token
         self.IMG_START_TOKEN = hf_config.img_start_token
         self.IMG_END_TOKEN = hf_config.img_end_token
         self.num_image_token = int(
-            (self.image_size // hf_config.patch_size) ** 2
+            (self.force_image_size // hf_config.patch_size) ** 2
             * (hf_config.downsample_ratio**2)
         )
         if hasattr(self._processor, "tokenizer"):
@@ -80,7 +80,7 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
     ) -> torch.Tensor:
         return image_to_pixel_values(
             image,
-            input_size=self.image_size,
+            input_size=self.force_image_size,
             max_num_tiles=max_num_tiles,
             use_thumbnail=self.use_thumbnail,
             mean=self.norm_mean,
