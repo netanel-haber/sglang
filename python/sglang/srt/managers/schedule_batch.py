@@ -190,7 +190,7 @@ class Modality(Enum):
         return [Modality.IMAGE, Modality.VIDEO, Modality.AUDIO]
 
 
-@dataclasses.dataclass
+@dataclasses.dataclass(kw_only=True)
 class MultimodalDataItem:
     """
     One MultimodalDataItem contains all inputs for one modality.
@@ -214,19 +214,8 @@ class MultimodalDataItem:
     # Model-specific data stored in a dictionary
     model_specific_data: dict[str, Any] = dataclasses.field(default_factory=dict)
 
-    class SingleMultiModalDataItemContainsAllItemsOfSameModality(ValueError):
-        """Even for multiple videos, all videos are concatenated into one `MultimodalDataItem`"""
-
-    @classmethod
-    def from_nested(cls, items: "list[MultimodalDataItem]", of_modality: Modality):
-        if len(items) > 1:
-            raise cls.SingleMultiModalDataItemContainsAllItemsOfSameModality
-        item = items[0]
-        if item.modality != of_modality:
-            raise ValueError(
-                f"Expected modality {of_modality}, but got {item.modality}"
-            )
-        return item
+    class MultimodalDataItemContainsAllItemsOfSameModality(ValueError):
+        """A single MultimodalDataItem contains all items of the same modality"""
 
     def __getattr__(self, name: str):
         if (
@@ -303,6 +292,23 @@ class MultimodalDataItem:
         self.offsets += other.offsets
         self.hash = hash((self.hash, other.hash))
         self.set_pad_value()
+
+
+@dataclasses.dataclass(kw_only=True)
+class VideoEVSDataItem(MultimodalDataItem):
+    modality: Modality = Modality.VIDEO
+    frames_per_video: list[int]
+
+    def __post_init__(self):
+        assert self.is_video()
+
+    @classmethod
+    def from_nested(cls, items: list[MultimodalDataItem]) -> "VideoEVSDataItem":
+        if len(items) > 1:
+            raise cls.MultimodalDataItemContainsAllItemsOfSameModality
+        item = items[0]
+        assert isinstance(item, VideoEVSDataItem)
+        return item
 
 
 @dataclasses.dataclass

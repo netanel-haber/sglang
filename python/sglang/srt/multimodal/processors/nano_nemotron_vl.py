@@ -17,8 +17,13 @@ import numpy as np
 import torch
 from PIL import Image
 
-from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
+from sglang.srt.managers.schedule_batch import (
+    Modality,
+    MultimodalDataItem,
+    VideoEVSDataItem,
+)
 from sglang.srt.models.nano_nemotron_vl import NemotronH_Nano_VL_V2
+from sglang.srt.multimodal.evs.with_evs import evs_tokens_per_frame, resolve_evs_config
 from sglang.srt.multimodal.internvl_utils import image_to_pixel_values
 from sglang.srt.multimodal.processors.base_processor import (
     BaseMultimodalProcessor,
@@ -46,10 +51,7 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
         self.IMG_CONTEXT_TOKEN = hf_config.img_context_token
         self.IMG_START_TOKEN = hf_config.img_start_token
         self.IMG_END_TOKEN = hf_config.img_end_token
-        self.num_image_token = int(
-            (self.force_image_size // hf_config.patch_size) ** 2
-            * (hf_config.downsample_ratio**2)
-        )
+        self.num_image_token = hf_config.num_image_token
         if hasattr(self._processor, "tokenizer"):
             tokenizer = self._processor.tokenizer
         else:
@@ -75,6 +77,8 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
         self.PLACEHOLDER_ID = tokenizer.convert_tokens_to_ids(self.PLACEHOLDER)
         assert isinstance(self.PLACEHOLDER_ID, int)
 
+        self.evs_config = resolve_evs_config(self)
+
     def preprocess_image(
         self, image: Image.Image, *, max_num_tiles: int = DEFAULT_NUM_TILES
     ) -> torch.Tensor:
@@ -90,10 +94,8 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
     def render_image(self, *, num_tiles: int):
         return f"{self.IMG_START_TOKEN}{self.IMG_CONTEXT_TOKEN * self.num_image_token * num_tiles}{self.IMG_END_TOKEN}"
 
-    def render_frame(
-        self, frame_index: int, *, timestamp: float, start_placeholder_token: str
-    ):
-        return f"Frame {frame_index + 1} sampled at {timestamp:.2f} seconds: {start_placeholder_token}{self.IMG_CONTEXT_TOKEN * self.num_image_token}{self.IMG_END_TOKEN}"
+    def render_frame(self, frame_index: int, *, timestamp: float, num_tokens: int):
+        return f"Frame {frame_index + 1} sampled at {timestamp:.2f} seconds: {self.PLACEHOLDER}{self.IMG_CONTEXT_TOKEN * num_tokens}{self.IMG_END_TOKEN}"
 
     @staticmethod
     def parse_video(video: "VideoReader") -> tuple[np.ndarray, list[float]]:
@@ -132,10 +134,18 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
             image_feature = torch.cat(preprocessed_images, dim=0)
 
         video_feature = None
+        frames_per_video: list[int] = []
         if base_output.videos:
             preprocessed_videos = []
             for video in base_output.videos:
                 video_array, timestamps = self.parse_video(video)
+                num_frames = len(timestamps)
+                frames_per_video.append(num_frames)
+                tokens_per_frame = (
+                    [self.num_image_token] * num_frames
+                    if self.evs_config is None
+                    else evs_tokens_per_frame(self.evs_config, num_frames)
+                )
                 frames_tensors = [
                     self.preprocess_image(
                         Image.fromarray(frame, mode="RGB"),
@@ -149,9 +159,11 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
                     self.render_frame(
                         i,
                         timestamp=timestamp,
-                        start_placeholder_token=self.PLACEHOLDER,
+                        num_tokens=num_tokens,
                     )
-                    for i, timestamp in enumerate(timestamps)
+                    for i, (timestamp, num_tokens) in enumerate(
+                        zip(timestamps, tokens_per_frame, strict=True)
+                    )
                 ]
                 prompt = prompt.replace(
                     self.VIDEO_CONTEXT_TOKEN, "".join(rendered_frames), 1
@@ -178,13 +190,22 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
         items = []
         if image_feature is not None:
             item = MultimodalDataItem(
-                Modality.IMAGE, feature=image_feature, offsets=img_offsets
+                modality=Modality.IMAGE, feature=image_feature, offsets=img_offsets
             )
             items.append(item)
         if video_feature is not None:
-            item = MultimodalDataItem(
-                Modality.VIDEO, feature=video_feature, offsets=video_offsets
-            )
+            if self.evs_config is None:
+                item = MultimodalDataItem(
+                    modality=Modality.VIDEO,
+                    feature=video_feature,
+                    offsets=video_offsets,
+                )
+            else:
+                item = VideoEVSDataItem(
+                    frames_per_video=frames_per_video,
+                    feature=video_feature,
+                    offsets=video_offsets,
+                )
             items.append(item)
 
         return {
