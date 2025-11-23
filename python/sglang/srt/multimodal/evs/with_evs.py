@@ -1,3 +1,4 @@
+import dataclasses
 import typing
 from dataclasses import dataclass, fields
 from typing import Callable
@@ -6,7 +7,7 @@ import torch
 from transformers import PretrainedConfig
 
 from sglang.srt.managers.mm_utils import EVSEmbeddingResult
-from sglang.srt.managers.schedule_batch import VideoEVSDataItem
+from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
 from sglang.srt.multimodal.evs.evs_core import (
     compute_retained_tokens_count,
     compute_retention_mask,
@@ -14,6 +15,15 @@ from sglang.srt.multimodal.evs.evs_core import (
 from sglang.srt.multimodal.processors.base_processor import BaseMultimodalProcessor
 from sglang.srt.utils.common import get_bool_env_var
 from sglang.utils import logger
+
+
+@dataclasses.dataclass(kw_only=True)
+class VideoEVSDataItem(MultimodalDataItem):
+    modality: Modality = Modality.VIDEO
+    frames_per_video: list[int]
+
+    def __post_init__(self):
+        assert self.is_video()
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -42,7 +52,7 @@ class EVSConfig:
 class EVS:
     def __init__(
         self,
-        get_video_feature: typing.Callable[[list[VideoEVSDataItem]], torch.Tensor],
+        get_video_feature: typing.Callable[[list[MultimodalDataItem]], torch.Tensor],
         *,
         config: EVSConfig,
         model_name: str,
@@ -62,10 +72,13 @@ class EVS:
         )
         self.logger = logger.info if verbose else logger.debug
 
-    def __call__(self, items: list[VideoEVSDataItem]) -> EVSEmbeddingResult:
+    def __call__(self, items: list[MultimodalDataItem]) -> EVSEmbeddingResult:
         self.logger(f"Beginning EVS for model {self.model_name}")
-        videos_features = self.get_video_feature(items)
-        item = VideoEVSDataItem.from_nested(items)
+        if len(items) > 1:
+            raise MultimodalDataItem.MultimodalDataItemContainsAllItemsOfSameModality
+        item = items[0]
+        assert isinstance(item, VideoEVSDataItem)
+        videos_features = self.get_video_feature([item])
 
         final_embeddings = []
 
@@ -94,22 +107,24 @@ class EVS:
         )
 
 
-class VideoModel(typing.Protocol):
-    def get_video_feature(self, items: list[VideoEVSDataItem]) -> torch.Tensor: ...
-
-
-VideoProcessor = typing.TypeVar("VideoProcessor", bound=VideoModel)
-
 CreateEVSConfig = Callable[[PretrainedConfig], EVSConfig]
+
+
+class VideoModel(typing.Protocol):
+    def get_video_feature(self, items: list[MultimodalDataItem]) -> torch.Tensor: ...
+
 
 _CREATE_EVS_CONFIG: dict[type[VideoModel], CreateEVSConfig] = {}
 
 
+VideoModelType = typing.TypeVar("VideoModelType", bound=VideoModel)
+
+
 def with_EVS(
-    model_cls: type[VideoProcessor],
+    model_cls: type[VideoModelType],
     *,
     create_evs_config: CreateEVSConfig = EVSConfig.from_pretrained_config,
-) -> type[VideoProcessor]:
+) -> type[VideoModelType]:
     model_name = model_cls.__name__
 
     if not hasattr(model_cls, "get_video_feature"):
@@ -120,7 +135,7 @@ def with_EVS(
     original_init = model_cls.__init__
 
     def __init__(
-        self: VideoProcessor,
+        self: VideoModelType,
         config: PretrainedConfig,
         *args: typing.Any,
         **kwargs: typing.Any,

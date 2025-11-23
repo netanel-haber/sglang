@@ -294,23 +294,6 @@ class MultimodalDataItem:
         self.set_pad_value()
 
 
-@dataclasses.dataclass(kw_only=True)
-class VideoEVSDataItem(MultimodalDataItem):
-    modality: Modality = Modality.VIDEO
-    frames_per_video: list[int]
-
-    def __post_init__(self):
-        assert self.is_video()
-
-    @classmethod
-    def from_nested(cls, items: list[MultimodalDataItem]) -> "VideoEVSDataItem":
-        if len(items) > 1:
-            raise cls.MultimodalDataItemContainsAllItemsOfSameModality
-        item = items[0]
-        assert isinstance(item, VideoEVSDataItem)
-        return item
-
-
 @dataclasses.dataclass
 class MultimodalInputs:
     """The multimodal data related inputs."""

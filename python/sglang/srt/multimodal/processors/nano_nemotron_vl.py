@@ -17,13 +17,13 @@ import numpy as np
 import torch
 from PIL import Image
 
-from sglang.srt.managers.schedule_batch import (
-    Modality,
-    MultimodalDataItem,
-    VideoEVSDataItem,
-)
+from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
 from sglang.srt.models.nano_nemotron_vl import NemotronH_Nano_VL_V2
-from sglang.srt.multimodal.evs.with_evs import evs_tokens_per_frame, resolve_evs_config
+from sglang.srt.multimodal.evs.with_evs import (
+    VideoEVSDataItem,
+    evs_tokens_per_frame,
+    resolve_evs_config,
+)
 from sglang.srt.multimodal.internvl_utils import image_to_pixel_values
 from sglang.srt.multimodal.processors.base_processor import (
     BaseMultimodalProcessor,
