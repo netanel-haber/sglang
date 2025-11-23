@@ -1,13 +1,14 @@
 import dataclasses
 import typing
 from dataclasses import dataclass, fields
+from itertools import chain, pairwise
 from typing import Callable
 
 import torch
 from transformers import PretrainedConfig
 
-from sglang.srt.managers.mm_utils import EVSEmbeddingResult
 from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
+from sglang.srt.mem_cache.multimodal_cache import EmbeddingResult
 from sglang.srt.multimodal.evs.evs_core import (
     compute_retained_tokens_count,
     compute_retention_mask,
@@ -49,6 +50,49 @@ class EVSConfig:
         return EVSConfig(**{key: getattr(config, key) for key in field_names})
 
 
+def evs_rerender_pruned_frames(
+    input_ids: torch.Tensor,
+    *,
+    frame_offsets: list[tuple[int, int]],
+    num_tokens_per_frame: list[int],
+) -> torch.Tensor:
+    assert len(frame_offsets) == len(
+        num_tokens_per_frame
+    ), "Number of frame offsets must match number of tokens per frame"
+    filler_token_id = input_ids[frame_offsets[0][0]]
+    offsets_set = set(frame_offsets)
+    final = []
+    frame_idx = 0
+    all_pairs = list(
+        pairwise(sorted({-1, *chain.from_iterable(offsets_set), len(input_ids)}))
+    )
+    for i, (start, end) in enumerate(all_pairs):
+        if (start, end) in offsets_set:
+            num_tokens = num_tokens_per_frame[frame_idx]
+            final.append(
+                torch.tensor(
+                    [filler_token_id] * num_tokens,
+                    device=input_ids.device,
+                    dtype=input_ids.dtype,
+                )
+            )
+            frame_idx += 1
+        else:
+            if i + 1 < len(all_pairs) and num_tokens_per_frame[i + 1] == 0:
+                continue  # if the next frame is empty, don't render its timestamp at all
+            final.append(input_ids[start + 1 : end])
+    final_tensor = torch.cat(final)
+    assert len(final_tensor) == len(
+        input_ids
+    ), "Number of final tokens must match number of input tokens"
+    return final_tensor
+
+
+@dataclass(kw_only=True)
+class EVSEmbeddingResult(EmbeddingResult):
+    num_tokens_per_frame: list[int]
+
+
 class EVS:
     def __init__(
         self,
@@ -80,7 +124,8 @@ class EVS:
         assert isinstance(item, VideoEVSDataItem)
         videos_features = self.get_video_feature([item])
 
-        final_embeddings = []
+        final_embeddings: list[torch.Tensor] = []
+        num_tokens_per_frame: list[int] = []
 
         for single_video in videos_features.split(item.frames_per_video):
             num_frames = single_video.shape[0]
@@ -97,13 +142,13 @@ class EVS:
             preserved = single_video[retention_mask]
             final_embeddings.append(preserved)
             retention_mask_thw = retention_mask.reshape(video_size_thw)
-            num_tokens_per_frame = retention_mask_thw.sum(dim=(1, 2)).long().tolist()
+            num_tokens_per_frame.extend(
+                retention_mask_thw.sum(dim=(1, 2)).long().tolist()
+            )
         final_embeddings_tensor = torch.cat(final_embeddings)
         return EVSEmbeddingResult(
             embedding=final_embeddings_tensor,
             num_tokens_per_frame=num_tokens_per_frame,
-            original_num_tokens_per_frame=self.num_tokens_per_frame,
-            frames_per_video=item.frames_per_video,
         )
 
 

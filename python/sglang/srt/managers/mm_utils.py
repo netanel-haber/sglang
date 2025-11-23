@@ -5,8 +5,6 @@ Multi-modality utils
 import hashlib
 import pickle
 from abc import abstractmethod
-from dataclasses import dataclass
-from itertools import chain, pairwise
 from typing import Any, Callable, Dict, List, Literal, Optional, Tuple
 
 import numpy as np
@@ -22,6 +20,10 @@ from sglang.srt.managers.schedule_batch import (
 )
 from sglang.srt.mem_cache.multimodal_cache import EmbeddingResult, MultiModalStaticCache
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
+from sglang.srt.multimodal.evs.with_evs import (
+    EVSEmbeddingResult,
+    evs_rerender_pruned_frames,
+)
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import flatten_nested_list, is_npu, print_warning_once
 from sglang.utils import logger
@@ -361,47 +363,6 @@ def _get_precomputed_embedding(
     return None
 
 
-@dataclass(kw_only=True)
-class EVSEmbeddingResult(EmbeddingResult):
-    num_tokens_per_frame: list[int]
-    original_num_tokens_per_frame: int
-    frames_per_video: list[int]
-
-    def pruned_input_ids(
-        self,
-        input_ids: torch.Tensor,
-        *,
-        frame_offsets: list[tuple[int, int]],
-    ) -> torch.Tensor:
-        assert len(frame_offsets) == len(
-            self.num_tokens_per_frame
-        ), "Number of frame offsets must match number of tokens per frame"
-        filler_token_id = input_ids[frame_offsets[0][0]]
-        offsets_set = set(frame_offsets)
-        final = []
-        frame_idx = 0
-        for start, end in pairwise(
-            sorted({-1, *chain.from_iterable(offsets_set), len(input_ids)})
-        ):
-            if (start, end) in offsets_set:
-                num_tokens = self.num_tokens_per_frame[frame_idx]
-                final.append(
-                    torch.tensor(
-                        [filler_token_id] * num_tokens,
-                        device=input_ids.device,
-                        dtype=input_ids.dtype,
-                    )
-                )
-                frame_idx += 1
-            else:
-                final.append(input_ids[start + 1 : end])
-        final_tensor = torch.cat(final)
-        assert len(final_tensor) == len(
-            input_ids
-        ), "Number of final tokens must match number of input tokens"
-        return final_tensor
-
-
 DataEmbeddingFunc = Callable[
     [List[MultimodalDataItem]], torch.Tensor | EVSEmbeddingResult
 ]
@@ -546,17 +507,18 @@ def get_embedding_and_mask(
     # 2. Get mask
     if _is_npu:
         torch.npu.current_stream().synchronize()
-    pruned_input_ids = input_ids
     for res, offsets in zip(embedding_list, items_offset_list):
         if isinstance(res, EVSEmbeddingResult):
-            pruned_input_ids = res.pruned_input_ids(
-                pruned_input_ids, frame_offsets=offsets
+            input_ids = evs_rerender_pruned_frames(
+                input_ids,
+                frame_offsets=offsets,
+                num_tokens_per_frame=res.num_tokens_per_frame,
             )
-    special_multimodal_mask = _get_multimodal_mask(pruned_input_ids, placeholder_tensor)
+    special_multimodal_mask = _get_multimodal_mask(input_ids, placeholder_tensor)
     embedding = torch.cat([res.embedding for res in embedding_list])
     # 3. Adjust embedding length if needed
     embedding = _adjust_embedding_length(embedding, special_multimodal_mask, logger)
-    return pruned_input_ids, embedding, special_multimodal_mask
+    return input_ids, embedding, special_multimodal_mask
 
 
 def general_embed_mm_inputs(
