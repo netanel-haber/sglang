@@ -2,6 +2,7 @@ import dataclasses
 import typing
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from functools import cache
 
 import torch
 from transformers import PretrainedConfig
@@ -119,6 +120,7 @@ class EVSMixin(ABC):
         )
 
 
+@cache
 def resolve_evs_config(processor: BaseMultimodalProcessor) -> EVSConfig | None:
     config = processor.hf_config
     config_name = config.__class__.__name__
@@ -136,7 +138,7 @@ def resolve_evs_config(processor: BaseMultimodalProcessor) -> EVSConfig | None:
     if model_type in evs_models:
         evs_model = evs_models[model_type]
         evs_config = evs_model.create_evs_config(config)
-        msg = f"Resolved EVS config for {model_type=} {config_name=} {processor.__class__.__name__=}: {evs_config=}"
+        msg = f"Resolved EVS config for model: {model_type=} config: {config_name} processor: {processor.__class__.__name__=}: {evs_config=}"
         logger.info(msg)
         return evs_config
     else:

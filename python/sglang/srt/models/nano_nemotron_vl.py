@@ -37,7 +37,7 @@ from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.model_loader.weight_utils import default_weight_loader
 from sglang.srt.models.nemotron_h import NemotronHForCausalLM
 from sglang.srt.models.radio import RadioModel
-from sglang.srt.multimodal.evs.with_evs import EVSConfig, EVSMixin
+from sglang.srt.multimodal.evs.evs_mixin import EVSConfig, EVSMixin
 from sglang.srt.utils import add_prefix
 
 if TYPE_CHECKING:
