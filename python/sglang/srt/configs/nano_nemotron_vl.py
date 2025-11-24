@@ -25,6 +25,7 @@ logger = logging.get_logger(__name__)
 
 class NemotronH_Nano_VL_V2_Config(PretrainedConfig):
     model_type = "NemotronH_Nano_VL_V2"
+    is_composition = True
 
     def __init__(
         self,
@@ -68,7 +69,7 @@ class NemotronH_Nano_VL_V2_Config(PretrainedConfig):
         # Assign configuration values
         vision_image_size = getattr(self.vision_config, "image_size", force_image_size)
         vision_patch_size = getattr(self.vision_config, "patch_size", patch_size)
-        self.force_image_size = int(
+        self.image_size = int(
             vision_image_size[0]
             if isinstance(vision_image_size, list)
             else vision_image_size
@@ -82,7 +83,7 @@ class NemotronH_Nano_VL_V2_Config(PretrainedConfig):
         self.downsample_ratio = downsample_ratio
 
         self.num_image_token = int(
-            (self.force_image_size * self.downsample_ratio // self.patch_size) ** 2
+            (self.image_size * self.downsample_ratio // self.patch_size) ** 2
         )
         """Example: `(512 * 0.5 / 16) ** 2 = 16 * 16 = 256`"""
 

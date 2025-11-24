@@ -1,6 +1,6 @@
 import dataclasses
 import typing
-from dataclasses import dataclass, fields
+from dataclasses import dataclass
 from itertools import chain, pairwise
 from typing import Callable
 
@@ -30,24 +30,13 @@ class VideoEVSDataItem(MultimodalDataItem):
 @dataclass(frozen=True, kw_only=True)
 class EVSConfig:
     video_pruning_rate: float
-    downsample_ratio: float
-    patch_size: int
-    force_image_size: int
-    num_image_token: int
+    tokens_per_frame: int
 
-    @classmethod
-    def from_pretrained_config(cls, config: PretrainedConfig) -> "EVSConfig":
-        config_cls_name = type(config).__name__
-        assert isinstance(
-            config, PretrainedConfig
-        ), f"Expected Model config to be a PretrainedConfig, got {config_cls_name}"
-        field_names = [field.name for field in fields(cls)]
-        for key in field_names:
-            if not hasattr(config, key):
-                raise AttributeError(
-                    f"Expected Model config of type {config_cls_name} to have a `{key}` attribute"
-                )
-        return EVSConfig(**{key: getattr(config, key) for key in field_names})
+    def __post_init__(self):
+        assert (
+            self.video_pruning_rate >= 0.0 and self.video_pruning_rate < 1.0
+        ), f"Video pruning rate must be between 0.0 and 1.0, got {self.video_pruning_rate=}"
+        assert self.tokens_per_frame > 0
 
 
 def evs_rerender_pruned_frames(
@@ -94,6 +83,8 @@ class EVSEmbeddingResult(EmbeddingResult):
 
 
 class EVS:
+    SGLANG_EVS_VERBOSE = "SGLANG_EVS_VERBOSE"
+
     def __init__(
         self,
         get_video_feature: typing.Callable[[list[MultimodalDataItem]], torch.Tensor],
@@ -108,13 +99,15 @@ class EVS:
         self.q = config.video_pruning_rate
         assert self.q > 0.0 and self.q < 1.0
 
-        self.num_tokens_per_frame = config.num_image_token
-        self.rows = self.cols = int(config.num_image_token**0.5)
+        self.num_tokens_per_frame = config.tokens_per_frame
+        self.rows = self.cols = int(config.tokens_per_frame**0.5)
 
         verbose = get_bool_env_var(
-            "SGLANG_EVS_VERBOSE", default="false" if not verbose else "true"
+            self.SGLANG_EVS_VERBOSE, default="false" if not verbose else "true"
         )
         self.logger = logger.info if verbose else logger.debug
+        if verbose:
+            self.logger(f"EVS is enabled ({self.SGLANG_EVS_VERBOSE=})")
 
     def __call__(self, items: list[MultimodalDataItem]) -> EVSEmbeddingResult:
         self.logger(f"Beginning EVS for model {self.model_name}")
@@ -152,14 +145,11 @@ class EVS:
         )
 
 
-CreateEVSConfig = Callable[[PretrainedConfig], EVSConfig]
-
-
 class VideoModel(typing.Protocol):
     def get_video_feature(self, items: list[MultimodalDataItem]) -> torch.Tensor: ...
 
 
-_CREATE_EVS_CONFIG: dict[type[VideoModel], CreateEVSConfig] = {}
+_CREATE_EVS_CONFIG: dict[type[VideoModel], Callable[[PretrainedConfig], EVSConfig]] = {}
 
 
 VideoModelType = typing.TypeVar("VideoModelType", bound=VideoModel)
@@ -167,8 +157,7 @@ VideoModelType = typing.TypeVar("VideoModelType", bound=VideoModel)
 
 def with_EVS(
     model_cls: type[VideoModelType],
-    *,
-    create_evs_config: CreateEVSConfig = EVSConfig.from_pretrained_config,
+    create_evs_config: Callable[[PretrainedConfig], EVSConfig],
 ) -> type[VideoModelType]:
     model_name = model_cls.__name__
 
@@ -186,18 +175,15 @@ def with_EVS(
         **kwargs: typing.Any,
     ) -> None:
         evs_config = create_evs_config(config)
-        self.evs_config = evs_config
-        if evs_config.video_pruning_rate <= 0.0:
-            logger.warning(
-                f"EVS was requested on model {model_name} but is disabled for pruning_rate <= 0.0 ({evs_config.video_pruning_rate=}). EVS will be disabled"
-            )
-            self.evs_config = None
-        else:
-            logger.info(
-                f"EVS will be enabled for model {model_name} [video_pruning_rate={evs_config.video_pruning_rate}]"
-            )
+        video_pruning_rate = evs_config.video_pruning_rate
+        if video_pruning_rate > 0.0:
+            logger.info(f"EVS will be enabled for {model_name} [{video_pruning_rate=}]")
             self.get_video_feature = EVS(
                 self.get_video_feature, config=evs_config, model_name=model_name
+            )
+        else:
+            logger.warning(
+                f"EVS was requested on model {model_name} but is disabled for pruning_rate == 0.0. EVS will be disabled"
             )
         original_init(self, config, *args, **kwargs)
 
@@ -211,7 +197,7 @@ def evs_tokens_per_frame(
     num_frames: int,
 ) -> list[int]:
     retained = compute_retained_tokens_count(
-        tokens_per_frame=config.num_image_token,
+        tokens_per_frame=config.tokens_per_frame,
         num_frames=num_frames,
         q=config.video_pruning_rate,
     )
