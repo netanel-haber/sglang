@@ -22,7 +22,7 @@ from sglang.srt.mem_cache.multimodal_cache import EmbeddingResult, MultiModalSta
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.multimodal.evs.with_evs import (
     EVSEmbeddingResult,
-    evs_rerender_pruned_frames,
+    evs_reorder_placeholder_tokens,
 )
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import flatten_nested_list, is_npu, print_warning_once
@@ -509,7 +509,7 @@ def get_embedding_and_mask(
         torch.npu.current_stream().synchronize()
     for res, offsets in zip(embedding_list, items_offset_list):
         if isinstance(res, EVSEmbeddingResult):
-            input_ids = evs_rerender_pruned_frames(
+            input_ids = evs_reorder_placeholder_tokens(
                 input_ids,
                 frame_offsets=offsets,
                 num_tokens_per_frame=res.num_tokens_per_frame,

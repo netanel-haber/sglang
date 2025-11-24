@@ -14,6 +14,8 @@
 # Adapted from https://github.com/vllm-project/vllm/blob/main/vllm/multimodal/evs.py
 # https://arxiv.org/abs/2510.14624: Efficient Video Sampling: Pruning Temporally Redundant Tokens for Faster VLM Inference
 
+from itertools import chain, pairwise
+
 import torch
 
 
@@ -94,3 +96,44 @@ def compute_retention_mask(
 
     mask = retention_mask.view(-1)  # "T H W -> (T H W)"
     return mask
+
+
+# ▲ End of VLLM code
+
+
+def evs_reorder_placeholder_tokens(
+    input_ids: torch.Tensor,
+    *,
+    frame_offsets: list[tuple[int, int]],
+    num_tokens_per_frame: list[int],
+) -> torch.Tensor:
+    assert len(frame_offsets) == len(
+        num_tokens_per_frame
+    ), "Number of frame offsets must match number of tokens per frame"
+    filler_token_id = input_ids[frame_offsets[0][0]]
+    offsets_set = set(frame_offsets)
+    final = []
+    frame_idx = 0
+    all_pairs = list(
+        pairwise(sorted({-1, *chain.from_iterable(offsets_set), len(input_ids)}))
+    )
+    for i, (start, end) in enumerate(all_pairs):
+        if (start, end) in offsets_set:
+            num_tokens = num_tokens_per_frame[frame_idx]
+            final.append(
+                torch.tensor(
+                    [filler_token_id] * num_tokens,
+                    device=input_ids.device,
+                    dtype=input_ids.dtype,
+                )
+            )
+            frame_idx += 1
+        else:
+            if i + 1 < len(all_pairs) and num_tokens_per_frame[i + 1] == 0:
+                continue  # if the next frame is empty, don't render its timestamp at all
+            final.append(input_ids[start + 1 : end])
+    final_tensor = torch.cat(final)
+    assert len(final_tensor) == len(
+        input_ids
+    ), "Number of final tokens must match number of input tokens"
+    return final_tensor

@@ -19,11 +19,7 @@ from PIL import Image
 
 from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
 from sglang.srt.models.nano_nemotron_vl import NemotronH_Nano_VL_V2
-from sglang.srt.multimodal.evs.with_evs import (
-    VideoEVSDataItem,
-    evs_tokens_per_frame,
-    resolve_evs_config,
-)
+from sglang.srt.multimodal.evs.with_evs import resolve_evs_config, resolve_evs_data_item
 from sglang.srt.multimodal.internvl_utils import image_to_pixel_values
 from sglang.srt.multimodal.processors.base_processor import (
     BaseMultimodalProcessor,
@@ -144,7 +140,7 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
                 tokens_per_frame = (
                     [self.num_image_token] * num_frames
                     if self.evs_config is None
-                    else evs_tokens_per_frame(self.evs_config, num_frames)
+                    else self.evs_config.tokens_per_frame(num_frames)
                 )
                 frames_tensors = [
                     self.preprocess_image(
@@ -194,18 +190,9 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
             )
             items.append(item)
         if video_feature is not None:
-            if self.evs_config is None:
-                item = MultimodalDataItem(
-                    modality=Modality.VIDEO,
-                    feature=video_feature,
-                    offsets=video_offsets,
-                )
-            else:
-                item = VideoEVSDataItem(
-                    frames_per_video=frames_per_video,
-                    feature=video_feature,
-                    offsets=video_offsets,
-                )
+            item = resolve_evs_data_item(
+                self, frames_per_video, feature=video_feature, offsets=video_offsets
+            )
             items.append(item)
 
         return {
