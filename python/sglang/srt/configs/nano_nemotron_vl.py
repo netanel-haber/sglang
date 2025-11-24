@@ -39,7 +39,7 @@ class NemotronH_Nano_VL_V2_Config(PretrainedConfig):
         projector_hidden_size=4096,
         vit_hidden_size=1280,
         attn_implementation="flash_attention_2",
-        video_pruning_rate: float = 0.0,  # TODO: Override in server args?
+        video_pruning_rate: float = 0.0,
         video_context_token: str = "<video>",
         img_context_token: str = "<image>",
         img_start_token: str = "<img>",
