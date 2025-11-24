@@ -1,7 +1,6 @@
 import dataclasses
 import typing
 from abc import ABC, abstractmethod
-from collections import defaultdict
 from dataclasses import dataclass
 
 import torch
@@ -54,8 +53,6 @@ class EVSEmbeddingResult(EmbeddingResult):
 
 
 class EVSMixin(ABC):
-    _EVS_CONFIG: typing.ClassVar[dict[str, EVSConfig]] = defaultdict(EVSConfig.disabled)
-
     @staticmethod
     @abstractmethod
     def create_evs_config(config: PretrainedConfig) -> EVSConfig:
@@ -72,9 +69,7 @@ class EVSMixin(ABC):
             raise AttributeError(
                 f"Expected Model {model_name} to have a `get_video_feature` method"
             )
-
         self.evs_config = self.create_evs_config(config)
-        self._EVS_CONFIG[model_name] = self.evs_config
         video_pruning_rate = self.evs_config.video_pruning_rate
         if video_pruning_rate > 0.0:
             logger.info(f"EVS will be enabled for {model_name} [{video_pruning_rate=}]")
@@ -131,14 +126,23 @@ def resolve_evs_config(processor: BaseMultimodalProcessor) -> EVSConfig | None:
     assert isinstance(
         model_type, str
     ), f"Expected `model_type` to be found on {config_name=}"
-    evs_config = EVSMixin._EVS_CONFIG.get(model_type, None)
-    if evs_config is not None:
+
+    evs_models = {
+        model.__name__: model
+        for model in processor.models
+        if issubclass(model, EVSMixin)
+    }
+
+    if model_type in evs_models:
+        evs_model = evs_models[model_type]
+        evs_config = evs_model.create_evs_config(config)
         msg = f"Resolved EVS config for {model_type=} {config_name=} {processor.__class__.__name__=}: {evs_config=}"
         logger.info(msg)
         return evs_config
     else:
-        msg = f"No EVS config found for {model_type=} {config_name=} {processor.__class__.__name__=}"
-        logger.warning(msg)
+        logger.warning(
+            f"No EVS config found for {model_type=} {config_name=} {processor.__class__.__name__=}"
+        )
         return None
 
 
