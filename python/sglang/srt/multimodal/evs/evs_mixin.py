@@ -72,9 +72,9 @@ class EVSMixin(ABC):
             )
         self.evs_config = self.create_evs_config(config)
         video_pruning_rate = self.evs_config.video_pruning_rate
+        self.original_get_video_feature = self.get_video_feature
         if video_pruning_rate > 0.0:
             logger.info(f"EVS will be enabled for {model_name} [{video_pruning_rate=}]")
-            self.original_get_video_feature = self.get_video_feature
             self.get_video_feature = self.evs
         else:
             logger.warning(
@@ -124,10 +124,9 @@ class EVSMixin(ABC):
 def resolve_evs_config(processor: BaseMultimodalProcessor) -> EVSConfig | None:
     config = processor.hf_config
     config_name = config.__class__.__name__
-    model_type = getattr(config, "model_type", None)
-    assert isinstance(
-        model_type, str
-    ), f"Expected `model_type` to be found on {config_name=}"
+    processor_name = processor.__class__.__name__
+    model_name = config.model_type
+    assert isinstance(model_name, str)
 
     evs_models = {
         model.__name__: model
@@ -135,16 +134,14 @@ def resolve_evs_config(processor: BaseMultimodalProcessor) -> EVSConfig | None:
         if issubclass(model, EVSMixin)
     }
 
-    if model_type in evs_models:
-        evs_model = evs_models[model_type]
+    identity = f"processor={processor_name} model={model_name} config={config_name}"
+    if model_name in evs_models:
+        evs_model = evs_models[model_name]
         evs_config = evs_model.create_evs_config(config)
-        msg = f"Resolved EVS config for model: {model_type=} config: {config_name} processor: {processor.__class__.__name__=}: {evs_config=}"
-        logger.info(msg)
+        logger.info(f"Resolved EVS config for triplet {identity}")
         return evs_config
     else:
-        logger.warning(
-            f"No EVS config found for {model_type=} {config_name=} {processor.__class__.__name__=}"
-        )
+        logger.info(f"No EVS config found for triplet {identity}")
         return None
 
 

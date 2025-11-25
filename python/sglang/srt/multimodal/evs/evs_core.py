@@ -14,7 +14,6 @@
 # Adapted from https://github.com/vllm-project/vllm/blob/main/vllm/multimodal/evs.py
 # https://arxiv.org/abs/2510.14624: Efficient Video Sampling: Pruning Temporally Redundant Tokens for Faster VLM Inference
 
-from itertools import chain, pairwise
 
 import torch
 
@@ -101,39 +100,25 @@ def compute_retention_mask(
 # ▲ End of VLLM code
 
 
-def evs_reorder_placeholder_tokens(
+def redistribute_placeholder_tokens_by_tokens_per_frame(
     input_ids: torch.Tensor,
     *,
-    frame_offsets: list[tuple[int, int]],
+    frame_offsets_inclusive: list[tuple[int, int]],
     num_tokens_per_frame: list[int],
 ) -> torch.Tensor:
-    assert len(frame_offsets) == len(
-        num_tokens_per_frame
-    ), "Number of frame offsets must match number of tokens per frame"
-    filler_token_id = input_ids[frame_offsets[0][0]]
-    offsets_set = set(frame_offsets)
+    input_ids_list: list[int] = input_ids.tolist()
+    filler_token_id = input_ids_list[frame_offsets_inclusive[0][0]]
+
+    cursor = 0
     final = []
-    frame_idx = 0
-    all_pairs = list(
-        pairwise(sorted({-1, *chain.from_iterable(offsets_set), len(input_ids)}))
-    )
-    for i, (start, end) in enumerate(all_pairs):
-        if (start, end) in offsets_set:
-            num_tokens = num_tokens_per_frame[frame_idx]
-            final.append(
-                torch.tensor(
-                    [filler_token_id] * num_tokens,
-                    device=input_ids.device,
-                    dtype=input_ids.dtype,
-                )
-            )
-            frame_idx += 1
-        else:
-            if i + 1 < len(all_pairs) and num_tokens_per_frame[i + 1] == 0:
-                continue  # if the next frame is empty, don't render its timestamp at all
-            final.append(input_ids[start + 1 : end])
-    final_tensor = torch.cat(final)
-    assert len(final_tensor) == len(
-        input_ids
-    ), "Number of final tokens must match number of input tokens"
+    for (start, end), num_tokens in zip(
+        frame_offsets_inclusive, num_tokens_per_frame, strict=True
+    ):
+        final.extend(input_ids_list[cursor:start])
+        final.extend([filler_token_id] * num_tokens)
+        cursor = end + 1
+    final.extend(input_ids_list[cursor:])
+    assert len(final) == len(input_ids_list)
+
+    final_tensor = torch.tensor(final, device=input_ids.device, dtype=input_ids.dtype)
     return final_tensor
