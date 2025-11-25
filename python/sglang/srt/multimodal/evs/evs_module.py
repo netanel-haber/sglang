@@ -120,8 +120,8 @@ class EVSModule(torch.nn.Module, ABC):
 
 
 class EVSProcessor(BaseMultimodalProcessor):
-    def __init__(self, hf_config, server_args, _processor, *args, **kwargs):
-        super().__init__(hf_config, server_args, *args, **kwargs)
+    def __init__(self, hf_config, *args, **kwargs):
+        super().__init__(hf_config, *args, **kwargs)
 
         config_name = hf_config.__class__.__name__
         processor_name = self.__class__.__name__
@@ -136,14 +136,15 @@ class EVSProcessor(BaseMultimodalProcessor):
         }
 
         identity = f"processor={processor_name} model={model_name} config={config_name}"
+        self.evs_config = None
         if model_name in evs_models:
             evs_model = evs_models[model_name]
             evs_config = evs_model.create_evs_config(hf_config)
             logger.info(f"[EVS] resolved config for triplet {identity}: {evs_config=}")
-            self.evs_config = evs_config
+            if evs_config.video_pruning_rate > 0.0:
+                self.evs_config = evs_config
         else:
             logger.info(f"[EVS] no config found for triplet {identity}")
-            self.evs_config = None
 
     def evs_tokens_per_frame(self, num_frames: int) -> list[int]:
         assert self.evs_config is not None
