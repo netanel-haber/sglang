@@ -53,7 +53,7 @@ class EVSEmbeddingResult(EmbeddingResult):
     num_tokens_per_frame: list[int]
 
 
-class EVSMixin(ABC):
+class EVSModule(torch.nn.Module, ABC):
     @staticmethod
     @abstractmethod
     def create_evs_config(config: PretrainedConfig) -> EVSConfig:
@@ -65,6 +65,7 @@ class EVSMixin(ABC):
         *args: typing.Any,
         **kwargs: typing.Any,
     ) -> None:
+        super().__init__()
         model_name = self.__class__.__name__
         if not hasattr(self, "get_video_feature"):
             raise AttributeError(
@@ -74,18 +75,17 @@ class EVSMixin(ABC):
         video_pruning_rate = self.evs_config.video_pruning_rate
         self.original_get_video_feature = self.get_video_feature
         if video_pruning_rate > 0.0:
-            logger.info(f"EVS will be enabled for {model_name} [{video_pruning_rate=}]")
+            logger.info(f"[EVS] enabled for {model_name} [{video_pruning_rate=}]")
             self.get_video_feature = self.evs
         else:
-            logger.warning(
-                f"EVS was requested on model {model_name} but is disabled for pruning_rate == 0.0. EVS will be disabled."
+            logger.info(
+                f"[EVS] requested on model {model_name} but is disabled for pruning_rate == 0.0."
             )
 
     def evs(self, items: list[MultimodalDataItem]) -> EVSEmbeddingResult:
         q = self.evs_config.video_pruning_rate
-        logger.debug(f"Beginning EVS for model {self.__class__.__name__} [{q=}]")
-        num_tokens_per_frame = self.evs_config.num_tokens_per_frame
-        rows = cols = int(num_tokens_per_frame**0.5)
+        logger.debug(f"[EVS] beginning for model {self.__class__.__name__} [{q=}]")
+        rows = cols = int(self.evs_config.full_frame_num_tokens**0.5)
         if len(items) > 1:
             raise MultimodalDataItem.MultimodalDataItemContainsAllItemsOfSameModality
         item = items[0]
@@ -131,17 +131,17 @@ def resolve_evs_config(processor: BaseMultimodalProcessor) -> EVSConfig | None:
     evs_models = {
         model.__name__: model
         for model in processor.models
-        if issubclass(model, EVSMixin)
+        if issubclass(model, EVSModule)
     }
 
     identity = f"processor={processor_name} model={model_name} config={config_name}"
     if model_name in evs_models:
         evs_model = evs_models[model_name]
         evs_config = evs_model.create_evs_config(config)
-        logger.info(f"Resolved EVS config for triplet {identity}")
+        logger.info(f"[EVS] resolved config for triplet {identity}: {evs_config=}")
         return evs_config
     else:
-        logger.info(f"No EVS config found for triplet {identity}")
+        logger.info(f"[EVS] no config found for triplet {identity}")
         return None
 
 

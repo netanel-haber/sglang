@@ -23,7 +23,7 @@ from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.multimodal.evs.evs_core import (
     redistribute_placeholder_tokens_by_tokens_per_frame,
 )
-from sglang.srt.multimodal.evs.evs_mixin import EVSEmbeddingResult
+from sglang.srt.multimodal.evs.evs_module import EVSEmbeddingResult
 from sglang.srt.server_args import get_global_server_args
 from sglang.srt.utils import flatten_nested_list, is_npu, print_warning_once
 from sglang.utils import logger
@@ -511,7 +511,7 @@ def get_embedding_and_mask(
         if isinstance(res, EVSEmbeddingResult):
             input_ids = redistribute_placeholder_tokens_by_tokens_per_frame(
                 input_ids,
-                frame_offsets=offsets,
+                frame_offsets_inclusive=offsets,
                 num_tokens_per_frame=res.num_tokens_per_frame,
             )
     special_multimodal_mask = _get_multimodal_mask(input_ids, placeholder_tensor)

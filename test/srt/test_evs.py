@@ -4,15 +4,15 @@ import pytest
 
 
 def test_resolve_evs_config():
-    from sglang.srt.multimodal.evs.evs_mixin import (
+    from sglang.srt.multimodal.evs.evs_module import (
         EVSConfig,
-        EVSMixin,
+        EVSModule,
         resolve_evs_config,
     )
 
     evs_config = EVSConfig(video_pruning_rate=0.0, full_frame_num_tokens=256)
 
-    class FakeEVSModel(EVSMixin):
+    class FakeEVSModel(EVSModule):
         @classmethod
         def create_evs_config(cls, config):
             return evs_config
