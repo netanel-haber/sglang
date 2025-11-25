@@ -19,15 +19,9 @@ from PIL import Image
 
 from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
 from sglang.srt.models.nano_nemotron_vl import NemotronH_Nano_VL_V2
-from sglang.srt.multimodal.evs.evs_module import (
-    resolve_evs_config,
-    resolve_evs_data_item,
-)
+from sglang.srt.multimodal.evs.evs_module import EVSProcessor
 from sglang.srt.multimodal.internvl_utils import image_to_pixel_values
-from sglang.srt.multimodal.processors.base_processor import (
-    BaseMultimodalProcessor,
-    MultimodalSpecialTokens,
-)
+from sglang.srt.multimodal.processors.base_processor import MultimodalSpecialTokens
 from sglang.srt.utils.common import sample_video_frames
 
 if TYPE_CHECKING:
@@ -39,7 +33,7 @@ DESIRED_FPS = 2  # TODO: allow desired fps/num frames to be configurable
 MAX_FRAMES = 128
 
 
-class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
+class NanoNemotronVLImageProcessor(EVSProcessor):
     models = [NemotronH_Nano_VL_V2]
 
     def __init__(self, hf_config, server_args, _image_processor, *args, **kwargs):
@@ -75,8 +69,6 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
         assert isinstance(self.PLACEHOLDER, str)
         self.PLACEHOLDER_ID = tokenizer.convert_tokens_to_ids(self.PLACEHOLDER)
         assert isinstance(self.PLACEHOLDER_ID, int)
-
-        self.evs_config = resolve_evs_config(self)
 
     def preprocess_image(
         self, image: Image.Image, *, max_num_tiles: int = DEFAULT_NUM_TILES
@@ -143,7 +135,7 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
                 tokens_per_frame = (
                     [self.num_image_token] * num_frames
                     if self.evs_config is None
-                    else self.evs_config.tokens_per_frame(num_frames)
+                    else self.evs_tokens_per_frame(num_frames)
                 )
                 frames_tensors = [
                     self.preprocess_image(
@@ -193,8 +185,8 @@ class NanoNemotronVLImageProcessor(BaseMultimodalProcessor):
             )
             items.append(item)
         if video_feature is not None:
-            item = resolve_evs_data_item(
-                self, frames_per_video, feature=video_feature, offsets=video_offsets
+            item = self.evs_data_item(
+                frames_per_video, feature=video_feature, offsets=video_offsets
             )
             items.append(item)
 

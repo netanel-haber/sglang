@@ -2,7 +2,6 @@ import dataclasses
 import typing
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from functools import cache
 
 import torch
 from transformers import PretrainedConfig
@@ -26,6 +25,11 @@ class VideoEVSDataItem(MultimodalDataItem):
         assert self.is_video()
 
 
+@dataclass(kw_only=True)
+class EVSEmbeddingResult(EmbeddingResult):
+    num_tokens_per_frame: list[int]
+
+
 @dataclass(frozen=True, kw_only=True)
 class EVSConfig:
     video_pruning_rate: float
@@ -46,11 +50,6 @@ class EVSConfig:
         base = retained // num_frames
         rem = retained % num_frames
         return [base] * (num_frames - 1) + [base + rem]
-
-
-@dataclass(kw_only=True)
-class EVSEmbeddingResult(EmbeddingResult):
-    num_tokens_per_frame: list[int]
 
 
 class EVSModule(torch.nn.Module, ABC):
@@ -120,43 +119,48 @@ class EVSModule(torch.nn.Module, ABC):
         )
 
 
-@cache
-def resolve_evs_config(processor: BaseMultimodalProcessor) -> EVSConfig | None:
-    config = processor.hf_config
-    config_name = config.__class__.__name__
-    processor_name = processor.__class__.__name__
-    model_name = config.model_type
-    assert isinstance(model_name, str)
+class EVSProcessor(BaseMultimodalProcessor):
+    def __init__(self, hf_config, server_args, _processor, *args, **kwargs):
+        super().__init__(hf_config, server_args, *args, **kwargs)
 
-    evs_models = {
-        model.__name__: model
-        for model in processor.models
-        if issubclass(model, EVSModule)
-    }
+        config_name = hf_config.__class__.__name__
+        processor_name = self.__class__.__name__
+        model_name = hf_config.model_type
 
-    identity = f"processor={processor_name} model={model_name} config={config_name}"
-    if model_name in evs_models:
-        evs_model = evs_models[model_name]
-        evs_config = evs_model.create_evs_config(config)
-        logger.info(f"[EVS] resolved config for triplet {identity}: {evs_config=}")
-        return evs_config
-    else:
-        logger.info(f"[EVS] no config found for triplet {identity}")
-        return None
+        assert isinstance(model_name, str)
 
+        evs_models = {
+            model.__name__: model
+            for model in self.models
+            if issubclass(model, EVSModule)
+        }
 
-def resolve_evs_data_item(
-    processor: BaseMultimodalProcessor,
-    frames_per_video: list[int],
-    *,
-    feature: torch.Tensor,
-    offsets: list[tuple[int, int]],
-) -> MultimodalDataItem:
-    if resolve_evs_config(processor) is not None:
-        return VideoEVSDataItem(
-            frames_per_video=frames_per_video, feature=feature, offsets=offsets
-        )
-    else:
-        return MultimodalDataItem(
-            modality=Modality.VIDEO, feature=feature, offsets=offsets
-        )
+        identity = f"processor={processor_name} model={model_name} config={config_name}"
+        if model_name in evs_models:
+            evs_model = evs_models[model_name]
+            evs_config = evs_model.create_evs_config(hf_config)
+            logger.info(f"[EVS] resolved config for triplet {identity}: {evs_config=}")
+            self.evs_config = evs_config
+        else:
+            logger.info(f"[EVS] no config found for triplet {identity}")
+            self.evs_config = None
+
+    def evs_tokens_per_frame(self, num_frames: int) -> list[int]:
+        assert self.evs_config is not None
+        return self.evs_config.tokens_per_frame(num_frames)
+
+    def evs_data_item(
+        self,
+        frames_per_video: list[int],
+        *,
+        feature: torch.Tensor,
+        offsets: list[tuple[int, int]],
+    ) -> MultimodalDataItem:
+        if self.evs_config is not None:
+            return VideoEVSDataItem(
+                frames_per_video=frames_per_video, feature=feature, offsets=offsets
+            )
+        else:
+            return MultimodalDataItem(
+                modality=Modality.VIDEO, feature=feature, offsets=offsets
+            )
