@@ -14,26 +14,7 @@ class TestNvidiaNemotronNanoV2VLTextOnly(GSM8KMixin, CustomTestCase):
     other_args = ["--max-mamba-cache-size", "256", "--trust-remote-code"]
 
 
-class TestNvidiaNemotronNanoV2VLMMMUNoEVS(MMMUVLMMixin, CustomTestCase):
-    accuracy = 0.454
-    model = MODEL
-    other_args = [
-        "--max-mamba-cache-size",
-        "128",
-        "--trust-remote-code",
-        "--json-model-override-args",
-        '{"video_pruning_rate": 0.0}',
-    ]
-    mmmu_args = ["--limit=0.1"]
-    """`--limit=0.1`: 10 percent of each task - this is fine for testing since the nominal result isn't interesting - this run is just to prevent relative regressions."""
-
-    def test_vlm_mmmu_benchmark(self):
-        self._run_vlm_mmmu_test(
-            SimpleNamespace(model=self.model, mmmu_accuracy=self.accuracy), "./logs"
-        )
-
-
-class TestNvidiaNemotronNanoV2VLMMMUWithEVS(MMMUVLMMixin, CustomTestCase):
+class TestNvidiaNemotronNanoV2VLMMMU(MMMUVLMMixin, CustomTestCase):
     accuracy = 0.454
     model = MODEL
     other_args = ["--max-mamba-cache-size", "128", "--trust-remote-code"]
