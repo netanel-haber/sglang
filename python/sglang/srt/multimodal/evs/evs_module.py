@@ -140,7 +140,7 @@ class EVSProcessor(BaseMultimodalProcessor):
         if model_name in evs_models:
             evs_model = evs_models[model_name]
             evs_config = evs_model.create_evs_config(hf_config)
-            logger.info(f"[EVS] resolved config for triplet {identity}: {evs_config=}")
+            logger.info(f"[EVS] {evs_config} resolved for triplet {identity}")
             if evs_config.video_pruning_rate > 0.0:
                 self.evs_config = evs_config
         else:

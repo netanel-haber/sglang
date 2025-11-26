@@ -375,7 +375,8 @@ def _get_chunked_prefill_embedding(
     prefix_length: List[int],
     extend_length: List[int],
     items_offset_list: List[List[Tuple[int, int]]],
-) -> Optional[list[EmbeddingResult]]:
+    input_ids: torch.Tensor,
+) -> tuple[torch.Tensor, torch.Tensor | None]:
     # Calculate embedding for each request, try to get it from cache to avoid repeated calculation
     embedding_list: list[EmbeddingResult] = []
     # FIXME(Xinyuan): temporary workaround for eagle3, which may have len(items_size) > len(prefix_length)
@@ -407,16 +408,23 @@ def _get_chunked_prefill_embedding(
                     "embedding size."
                 )
 
-        embedding_per_req.embedding, _, _ = get_embedding_chunk(
+        if isinstance(embedding_per_req, EVSEmbeddingResult):
+            input_ids = redistribute_placeholder_tokens_by_tokens_per_frame(
+                input_ids,
+                frame_offsets_inclusive=items_offset,
+                num_tokens_per_frame=embedding_per_req.num_tokens_per_frame,
+            )
+
+        embedding_per_req_chunk, _, _ = get_embedding_chunk(
             embedding=embedding_per_req.embedding,
             extend_prefix_len=prefix_length[i],
             extend_seq_len=extend_length[i] if i < len(extend_length) else 0,
             items_offset=items_offset,
         )
-        embedding_list.append(embedding_per_req)
+        embedding_list.append(embedding_per_req_chunk)
     if len(embedding_list) == 0:
-        return None
-    return embedding_list
+        return input_ids, None
+    return input_ids, torch.concat(embedding_list, dim=0)
 
 
 def _get_multimodal_mask(
@@ -487,35 +495,23 @@ def get_embedding_and_mask(
         - A boolean mask tensor indicating where these embeddings should be placed
     """
     # 1. Get embedding
-    precomputed_embedding = _get_precomputed_embedding(embedding_items)
-    embedding_list = (
-        [EmbeddingResult(embedding=precomputed_embedding)]
-        if precomputed_embedding is not None
-        else None
-    )
-    if embedding_list is None:
-        embedding_list = _get_chunked_prefill_embedding(
+    embedding = _get_precomputed_embedding(embedding_items)
+    if embedding is None:
+        input_ids, embedding = _get_chunked_prefill_embedding(
             data_embedding_func,
             embedding_items,
             items_size,
             prefix_length,
             extend_length,
             items_offset_list,
+            input_ids,
         )
-        if embedding_list is None:
-            return None, None
+        if embedding is None:
+            return input_ids, None, None
     # 2. Get mask
     if _is_npu:
         torch.npu.current_stream().synchronize()
-    for res, offsets in zip(embedding_list, items_offset_list):
-        if isinstance(res, EVSEmbeddingResult):
-            input_ids = redistribute_placeholder_tokens_by_tokens_per_frame(
-                input_ids,
-                frame_offsets_inclusive=offsets,
-                num_tokens_per_frame=res.num_tokens_per_frame,
-            )
     special_multimodal_mask = _get_multimodal_mask(input_ids, placeholder_tensor)
-    embedding = torch.cat([res.embedding for res in embedding_list])
     # 3. Adjust embedding length if needed
     embedding = _adjust_embedding_length(embedding, special_multimodal_mask, logger)
     return input_ids, embedding, special_multimodal_mask
