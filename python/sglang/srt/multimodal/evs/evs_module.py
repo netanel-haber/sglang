@@ -119,9 +119,21 @@ class EVSModule(torch.nn.Module, ABC):
         )
 
 
-class EVSProcessor(BaseMultimodalProcessor):
+@dataclass(frozen=True, kw_only=True)
+class NonEVSConfig:
+    frame_num_tokens: int
+
+
+class EVSProcessor(BaseMultimodalProcessor, ABC):
+    @staticmethod
+    @abstractmethod
+    def create_non_evs_config(hf_config: PretrainedConfig) -> NonEVSConfig:
+        """account for models in processor.models that don't support EVS"""
+        raise NotImplementedError
+
     def __init__(self, hf_config, *args, **kwargs):
         super().__init__(hf_config, *args, **kwargs)
+        self.non_evs_config = self.create_non_evs_config(hf_config)
 
         config_name = hf_config.__class__.__name__
         processor_name = self.__class__.__name__
@@ -135,22 +147,32 @@ class EVSProcessor(BaseMultimodalProcessor):
             if issubclass(model, EVSModule)
         }
 
+        if len(evs_models) == 0:
+            logger.warning(
+                f"[EVS] No EVS models found for processor.models={self.models}"
+            )
+
         identity = f"processor={processor_name} model={model_name} config={config_name}"
         self.evs_config = None
         if model_name in evs_models:
             evs_model = evs_models[model_name]
             evs_config = evs_model.create_evs_config(hf_config)
+            assert (
+                self.non_evs_config.frame_num_tokens == evs_config.full_frame_num_tokens
+            )
             logger.info(f"[EVS] {evs_config} resolved for triplet {identity}")
             if evs_config.video_pruning_rate > 0.0:
                 self.evs_config = evs_config
         else:
             logger.info(f"[EVS] no config found for triplet {identity}")
 
-    def evs_tokens_per_frame(self, num_frames: int) -> list[int]:
-        assert self.evs_config is not None
-        return self.evs_config.tokens_per_frame(num_frames)
+    def tokens_per_frame(self, num_frames: int) -> list[int]:
+        if self.evs_config is not None:
+            return self.evs_config.tokens_per_frame(num_frames)
+        else:
+            return [self.non_evs_config.frame_num_tokens] * num_frames
 
-    def evs_data_item(
+    def data_item(
         self,
         frames_per_video: list[int],
         *,

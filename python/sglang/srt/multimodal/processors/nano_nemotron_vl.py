@@ -19,13 +19,14 @@ from PIL import Image
 
 from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
 from sglang.srt.models.nano_nemotron_vl import NemotronH_Nano_VL_V2
-from sglang.srt.multimodal.evs.evs_module import EVSProcessor
+from sglang.srt.multimodal.evs.evs_module import EVSProcessor, NonEVSConfig
 from sglang.srt.multimodal.internvl_utils import image_to_pixel_values
 from sglang.srt.multimodal.processors.base_processor import MultimodalSpecialTokens
 from sglang.srt.utils.common import sample_video_frames
 
 if TYPE_CHECKING:
     from decord import VideoReader
+    from transformers.configuration_utils import PretrainedConfig
 
 DEFAULT_NUM_TILES = 12
 NUM_VIDEO_TILES = 1
@@ -34,6 +35,10 @@ MAX_FRAMES = 128
 
 
 class NanoNemotronVLImageProcessor(EVSProcessor):
+    @staticmethod
+    def create_non_evs_config(hf_config: "PretrainedConfig"):
+        return NonEVSConfig(num_frame_tokens=hf_config.num_image_token)
+
     models = [NemotronH_Nano_VL_V2]
 
     def __init__(self, hf_config, server_args, _image_processor, *args, **kwargs):
@@ -132,11 +137,7 @@ class NanoNemotronVLImageProcessor(EVSProcessor):
                 video_array, timestamps = self.parse_video(video)
                 num_frames = len(timestamps)
                 frames_per_video.append(num_frames)
-                tokens_per_frame = (
-                    [self.num_image_token] * num_frames
-                    if self.evs_config is None
-                    else self.evs_tokens_per_frame(num_frames)
-                )
+                tokens_per_frame = self.tokens_per_frame(num_frames)
                 frames_tensors = [
                     self.preprocess_image(
                         Image.fromarray(frame, mode="RGB"),
@@ -185,7 +186,7 @@ class NanoNemotronVLImageProcessor(EVSProcessor):
             )
             items.append(item)
         if video_feature is not None:
-            item = self.evs_data_item(
+            item = self.data_item(
                 frames_per_video, feature=video_feature, offsets=video_offsets
             )
             items.append(item)
