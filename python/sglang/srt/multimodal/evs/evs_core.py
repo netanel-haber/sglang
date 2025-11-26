@@ -106,6 +106,28 @@ def redistribute_placeholder_tokens_by_tokens_per_frame(
     frame_offsets_inclusive: list[tuple[int, int]],
     num_tokens_per_frame: list[int],
 ) -> torch.Tensor:
+    """
+    Adjust placeholder token spans in input_ids to match pruned token counts.
+
+    After EVS pruning, each frame may have a different number of tokens than
+    originally allocated in the prompt. This function rewrites the input_ids
+    so that the placeholder token spans match the actual pruned counts, while
+    preserving the total sequence length.
+
+    For example, if frame 0 originally had 4 placeholder tokens at positions [2,6] (inclusive)
+    but EVS pruned it to 2 tokens, this function shrinks that span to 2 tokens
+    and redistributes the freed positions. See: test/srt/test_evs.py:test_redistribute_placeholder_tokens_by_tokens_per_frame
+
+    Args:
+        input_ids: The original input token IDs with placeholder spans.
+        frame_offsets_inclusive: List of (start, end) positions for each frame's
+            placeholder span in input_ids. Both start and end are inclusive.
+        num_tokens_per_frame: The actual number of tokens per frame after pruning.
+
+    Returns:
+        Modified input_ids with placeholder spans adjusted to match pruned counts.
+        The total length is asserted to have *remained unchanged*.
+    """
     input_ids_list: list[int] = input_ids.tolist()
     filler_token_id = input_ids_list[frame_offsets_inclusive[0][0]]
 
