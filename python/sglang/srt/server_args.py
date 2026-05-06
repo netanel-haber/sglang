@@ -3477,6 +3477,7 @@ class ServerArgs:
                 "BailingMoeV2_5ForCausalLM",
                 "MistralLarge3ForCausalLM",
                 "PixtralForConditionalGeneration",
+                "NemotronHPuzzleForCausalLM",
                 "HYV3ForCausalLM",
             ]:
                 if self.speculative_draft_model_path is None:

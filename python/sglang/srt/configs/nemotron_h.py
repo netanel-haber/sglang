@@ -510,6 +510,9 @@ class NemotronHConfig(PretrainedConfig):
     def get_nemotron_h_config_for_layer(self, layer_idx: int) -> "NemotronHConfig":
         return self
 
+    def get_mtp_config(self) -> "NemotronHConfig":
+        return self
+
     @property
     def max_n_routed_experts(self) -> int:
         return self.n_routed_experts
@@ -519,15 +522,28 @@ class NemotronHPuzzleConfig(NemotronHConfig):
     model_type = "nemotron_h_puzzle"
     has_no_defaults_at_init = True
 
-    def __init__(self, *, block_configs: list[dict[str, Any]], **kwargs):
+    def __init__(
+        self,
+        *,
+        block_configs: list[dict[str, Any]],
+        mtp_block_configs: list[dict[str, Any]] | None = None,
+        **kwargs,
+    ):
         super().__init__(**kwargs)
         self.block_configs = block_configs
+        self.mtp_block_configs = mtp_block_configs
 
     def get_nemotron_h_config_for_layer(self, layer_idx: int) -> NemotronHConfig:
         layer_config = copy.copy(self)
         for key, value in self.block_configs[layer_idx].items():
             setattr(layer_config, key, value)
         return layer_config
+
+    def get_mtp_config(self) -> NemotronHConfig:
+        assert self.mtp_block_configs
+        mtp_config = copy.copy(self)
+        mtp_config.block_configs = self.mtp_block_configs
+        return mtp_config
 
     @property
     def max_n_routed_experts(self) -> int:
