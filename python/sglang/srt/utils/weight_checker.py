@@ -1,14 +1,50 @@
 import logging
-from typing import Dict, Iterable, Tuple
+import time
+from typing import Dict, Iterable, Optional, Tuple
 
 import torch
+import torch.distributed as dist
+from pydantic import BaseModel, ConfigDict
 
 from sglang.srt.layers.quantization.fp8_utils import (
     block_quant_dequant,
     inverse_transform_scale_ue8m0,
 )
+from sglang.srt.managers.mm_utils import tensor_hash
 
 logger = logging.getLogger(__name__)
+
+
+class _StrictBaseModel(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+class ParallelismInfo(_StrictBaseModel):
+    tp_rank: int
+    tp_size: int
+    dp_rank: int
+    dp_size: int
+    pp_rank: int
+    pp_size: int
+    rank: int
+    size: int
+
+
+class ChecksumInfo(_StrictBaseModel):
+    checksums: Dict[str, str]
+    parallelism_info: ParallelismInfo
+
+
+_NON_PERSISTENT_BUFFER_PATTERNS = (
+    "cos_sin_cache",
+    "inv_freq",
+    "freqs_cis",
+    "_weight_fp32",
+)
+
+
+def _is_non_persistent_buffer_name(name: str) -> bool:
+    return any(pat in name for pat in _NON_PERSISTENT_BUFFER_PATTERNS)
 
 
 class WeightChecker:
@@ -16,14 +52,16 @@ class WeightChecker:
         self._model_runner = model_runner
         self._snapshot_tensors = None
 
-    def handle(self, action: str):
+    def handle(self, action: str) -> Optional[Dict]:
         logger.info(f"[WeightChecker] handle action={action}")
         if action == "snapshot":
-            self._snapshot()
+            return self._snapshot()
         elif action == "reset_tensors":
-            self._reset_tensors()
+            return self._reset_tensors()
         elif action == "compare":
-            self._compare()
+            return self._compare()
+        elif action == "checksum":
+            return self._compute_checksum()
         else:
             raise Exception(f"Unsupported {action=}")
 
@@ -38,7 +76,7 @@ class WeightChecker:
 
     def _reset_tensors(self):
         for name, param in self._model_state():
-            if "cos_sin_cache" in name or "freqs_cis" in name or "_weight_fp32" in name:
+            if _is_non_persistent_buffer_name(name):
                 continue
             param.copy_(_random_like(param))
 
@@ -50,10 +88,54 @@ class WeightChecker:
             actual_tensors=_postprocess_tensors(dict(self._model_state())),
         )
 
+    def _compute_checksum(self) -> Dict:
+        torch.cuda.synchronize()
+        start = time.perf_counter()
+
+        # Reuse the snapshot/compare postprocess pipeline so fp8 weights are
+        # dequantized to bf16 before hashing — two (qweight, scale) pairs that
+        # produce the same bf16 must produce the same checksum.
+        checksums = {
+            name: _hash_tensor(tensor.data)
+            for name, should_compare, tensor in _postprocess_tensors(
+                dict(self._model_state())
+            )
+            if should_compare
+        }
+
+        torch.cuda.synchronize()
+        elapsed = time.perf_counter() - start
+        logger.info(
+            f"[WeightChecker] checksum computed for {len(checksums)} tensors in {elapsed:.3f}s"
+        )
+
+        info = ChecksumInfo(
+            checksums=checksums,
+            parallelism_info=self._parallelism_info(),
+        )
+        return info.model_dump()
+
+    def _parallelism_info(self) -> ParallelismInfo:
+        mr = self._model_runner
+        return ParallelismInfo(
+            tp_rank=mr.tp_rank,
+            tp_size=mr.tp_size,
+            dp_rank=mr.dp_rank if mr.dp_rank is not None else 0,
+            dp_size=mr.dp_size,
+            pp_rank=mr.pp_rank,
+            pp_size=mr.pp_size,
+            rank=dist.get_rank() if dist.is_initialized() else 0,
+            size=dist.get_world_size() if dist.is_initialized() else 1,
+        )
+
     def _model_state(self):
         # TODO: support EAGLE etc (e.g. yield from both main model and draft model)
         yield from self._model_runner.model.named_parameters()
         yield from self._model_runner.model.named_buffers()
+
+
+def _hash_tensor(t: torch.Tensor) -> str:
+    return f"{tensor_hash(t):016x}"
 
 
 def _check_tensors(
@@ -125,21 +207,12 @@ def _postprocess_tensors(
 
     skip_compare_names = []
 
-    # Skip non-persistent buffers like cos_sin_cache
-    # These buffers are registered with persistent=False and are not saved in checkpoints
-    # They should be recomputed after loading weights, so we don't compare them here
-    non_persistent_buffer_patterns = [
-        "cos_sin_cache",  # RoPE cache
-        "inv_freq",  # RoPE inverse frequency (if it exists as buffer)
-        "_weight_fp32",  # FP32 cache of gate weight (e.g. Glm4MoeGate)
-    ]
-
+    # Skip non-persistent buffers (registered with persistent=False; recomputed
+    # after weight load and not part of the synced payload).
     for name in raw:
-        for pattern in non_persistent_buffer_patterns:
-            if pattern in name:
-                skip_compare_names.append(name)
-                logger.info(f"[check_tensors] Skipping non-persistent buffer: {name}")
-                break
+        if _is_non_persistent_buffer_name(name):
+            skip_compare_names.append(name)
+            logger.info(f"[check_tensors] Skipping non-persistent buffer: {name}")
 
     # dequant fp8
     quant_names = [
